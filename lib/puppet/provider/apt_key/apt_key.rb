@@ -26,13 +26,23 @@ Puppet::Type.type(:apt_key).provide(:apt_key) do
       key_output = apt_key(cli_args)
     end
 
-    pub_line, fpr_line = nil
+    pub_line, sub_line, fpr_line = nil
 
     key_array = key_output.split("\n").collect do |line|
       if line.start_with?('pub')
           pub_line = line
+          # reset fpr_line, to skip any previous subkeys which were collected
+          fpr_line = nil
+          sub_line = nil
+      elsif line.start_with?('sub')
+          sub_line = line
       elsif line.start_with?('fpr')
           fpr_line = line
+      end
+
+      if (sub_line and fpr_line)
+        sub_line, fpr_line = nil
+        next
       end
 
       next unless (pub_line and fpr_line)
@@ -127,7 +137,15 @@ Puppet::Type.type(:apt_key).provide(:apt_key) do
       f
     else
       begin
-        key = parsedValue.read
+        # Only send basic auth if URL contains userinfo
+        # Some webservers (e.g. Amazon S3) return code 400 if empty basic auth is sent
+        if parsedValue.userinfo.nil?
+          key = parsedValue.read
+        else
+          user_pass = parsedValue.userinfo.split(':')
+          parsedValue.userinfo = ''
+          key = open(parsedValue, :http_basic_authentication => user_pass).read
+        end
       rescue OpenURI::HTTPError, Net::FTPPermError => e
         fail("#{e.message} for #{resource[:source]}")
       rescue SocketError
